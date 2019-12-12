@@ -21,4 +21,5 @@
 * Search from the bottom of the BFS tree.
     1. One branch goes up the tree until the two branch have the same depth
     2. Go up together, until them converge into the same internal node.
-* Assign an id to each cycle. Intersection of ids.
+* Assign an id to each cycle. 
+    * Actual path = Intersection of ids.
