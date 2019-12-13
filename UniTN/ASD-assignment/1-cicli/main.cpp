@@ -36,7 +36,14 @@ class UndirectedGraph {
     this->vertices_[b].adjacents.push_back(&this->vertices_[a]);
   }
 
+  /**
+   * Build BFS tree and get the optimal data structure on which queries can
+   * be run quickly.
+   */
   void buildBFSTree();
+  /**
+   * Query the length of the shortest path betweeen \p vertexA and \p vertexB.
+   */
   uint32_t querySPLength(uint32_t vertexA, uint32_t vertexB) const;
 
   friend ostream &operator<<(ostream &stream, const UndirectedGraph &graph) {
@@ -54,13 +61,29 @@ class UndirectedGraph {
 
     struct {
       Vertex *parent = nullptr;
+      /*
+       * Each edge has an unique incremental id.
+       * Exception: edges of the same clique have the same id.
+       */
       int id = -1;
     } parentEdge;
+    /**
+     * Special case optimization: if the SP query is between two vertex with
+     * the same farthestDirectlyReachableAncestor (i.e. the two vertex are in a
+     * path in the BFS tree were all vertices have degree 1, i.e. only one
+     * children) then there's no need to go up the BFS tree. Just get the
+     * difference between their distance from source (a.k.a. erdos number).
+     */
+    Vertex *farthestDirectlyReachableAncestor = nullptr;
 
     vector<Vertex *> adjacents;
     friend ostream &operator<<(ostream &stream, const Vertex &vertex) {
-      stream << vertex.value << " " << vertex.erdos << " "
-             << vertex.parentEdge.id << endl;
+      stream << "Vertex: " << vertex.value << ", erdos: " << vertex.erdos
+             << ", parent: " << vertex.parentEdge.id << ", ancestor: "
+             << (vertex.farthestDirectlyReachableAncestor
+                     ? vertex.farthestDirectlyReachableAncestor->value
+                     : UINT32_MAX)
+             << endl;
       return stream;
     }
   };
@@ -68,34 +91,93 @@ class UndirectedGraph {
 };
 
 void UndirectedGraph::buildBFSTree() {
+  // incremental edge ids
   int id = 0;
+  /*
+   * From where we start is arbitrary
+   */
   queue<Vertex *> queue;
   queue.push(&this->vertices_[0]);
   this->vertices_[0].erdos = 0;
 
+  /*
+   * We use these two variables to tell whether a vertex could have a directly
+   * reachable ancestor.
+   */
+  Vertex *lastExploredAdj = nullptr;
+  size_t exploredAdjCount = 0;
+
   while (!queue.empty()) {
     Vertex *u = queue.front();
     queue.pop();
-    if (u->parentEdge.parent == nullptr || u->parentEdge.id != -1) {
+
+    lastExploredAdj = nullptr;
+    exploredAdjCount = 0;
+
+    if (
+        // u is the source node
+        u->parentEdge.parent == nullptr || u->parentEdge.id != -1) {
       for (Vertex *v : u->adjacents) {
+        // for each non-explored vertex
         if (v->erdos == -1) {
+          lastExploredAdj = v;
+          ++exploredAdjCount;
+
           v->erdos = u->erdos + 1;
           queue.push(v);
+
+          /*
+           * Establish the parent-child relationship between u and v in the BFS
+           * tree. The id will be assigned when visiting v, so that we know
+           * which id to assign to the parentEdge based on the adjacents of
+           * v (i.e. whether there is a clique or not).
+           */
           v->parentEdge.parent = u;
         }
       }
     } else {
+      /*
+       * We're here:
+       * => u has a parent but not an id
+       *   => u is the first adjacent vertex  that we visit in the clique
+       *   (so except their common parent in the BFS tree)
+       *   => or u is a normal vertex
+       */
+
+      // assign incremental id
       u->parentEdge.id = id;
       id++;
       for (Vertex *v : u->adjacents) {
         if (v->erdos == -1) {
+          lastExploredAdj = v;
+          ++exploredAdjCount;
+
           v->erdos = u->erdos + 1;
           queue.push(v);
           v->parentEdge.parent = u;
         } else if (u->parentEdge.parent == v->parentEdge.parent) {
+          /*
+           * u and the adjacent v have the same parent => their are in the same
+           * clique.
+           * The first adjacent vertex of the common parent (which is the first
+           * visited vertex of the clique) takes care to assign id to all the
+           * siblings of the clique.
+           */
           v->parentEdge.id = u->parentEdge.id;
         }
       }
+    }
+    if (lastExploredAdj && exploredAdjCount == 1) {
+      /*
+       * if the current vertex has only explored a new vertex, we can say that
+       * in the BFS tree either the current vertex or the
+       * farthestDirectlyReachableAncestor of the current vertex is the
+       * farthestDirectlyReachableAncestor of the new vertex.
+       */
+      lastExploredAdj->farthestDirectlyReachableAncestor =
+          u->farthestDirectlyReachableAncestor
+              ? u->farthestDirectlyReachableAncestor
+              : u;
     }
   }
 }
@@ -106,6 +188,14 @@ uint32_t UndirectedGraph::querySPLength(uint32_t vertexA,
   const Vertex *a = &this->vertices_[vertexA];
   const Vertex *b = &this->vertices_[vertexB];
 
+  // special case optimization
+  if (a->farthestDirectlyReachableAncestor != nullptr &&
+      (a->farthestDirectlyReachableAncestor ==
+       b->farthestDirectlyReachableAncestor)) {
+    return (std::max(a->erdos, b->erdos) - std::min(a->erdos, b->erdos));
+  }
+
+  // otherwise: go up the BFS tree until a common vertex is reached.j
   while (a->erdos > b->erdos) {
     a = a->parentEdge.parent;
     ++distance;
